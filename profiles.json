@@ -1,0 +1,17 @@
+{
+  "profiles": [
+    {
+      "name": "PowerShell",
+      "command": "powershell.exe",
+      "args": ["-NoLogo"],
+      "cwd": "C:\\",
+      "env": {}
+    },
+    {
+      "name": "CMD",
+      "command": "cmd.exe",
+      "args": [],
+      "env": {}
+    }
+  ]
+}
