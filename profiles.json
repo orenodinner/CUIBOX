@@ -10,8 +10,7 @@
     {
       "name": "CMD",
       "command": "cmd.exe",
-      "args": [],
-      "env": {}
+      "args": [], "cwd": "C:\\temp",      "env": {}
     }
   ]
 }

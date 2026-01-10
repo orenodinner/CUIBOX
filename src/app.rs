@@ -1,67 +1,42 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
-use cockpit::{PaneHandle, PaneManager, PaneSize, SpawnConfig};
+use anyhow::{bail, Result};
+use cockpit::{PaneHandle, PaneSize, SpawnConfig};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::profiles::Profile;
-use crate::tabs::{Tab, TabsState};
+use crate::tabs::{new_tab, TabsState};
 
 pub struct App {
-    manager: PaneManager,
+    profiles: Vec<Profile>,
     tabs: TabsState,
     last_pane_size: Option<(u16, u16)>,
+    next_profile_index: usize,
 }
 
 impl App {
     pub fn new(profiles: Vec<Profile>) -> Result<Self> {
         if profiles.is_empty() {
-            bail!("profiles.json has no profiles");
+            bail!("profiles.json に profiles が定義されていません。");
         }
-        if profiles.len() > 4 {
-            bail!("This MVP supports up to 4 profiles");
-        }
-
-        let mut manager = PaneManager::new();
         let mut tabs = Vec::with_capacity(profiles.len());
 
-        for profile in profiles {
-            let mut config = SpawnConfig::new_command(profile.command.clone())
-                .args(profile.args.clone());
-
-            if let Some(cwd) = &profile.cwd {
-                config = config.cwd(PathBuf::from(cwd));
-            }
-            for (key, value) in &profile.env {
-                config = config.env(key, value);
-            }
-            if let Some(scrollback) = profile.scrollback {
-                config = config.scrollback(scrollback);
-            }
-
-            let handle = manager
-                .spawn(config)
-                .with_context(|| format!("Failed to spawn {}", profile.name))?;
-            tabs.push(Tab {
-                profile,
-                pane_id: handle.id(),
-            });
+        for (index, profile) in profiles.iter().cloned().enumerate() {
+            let tab = spawn_tab_from_profile(&profile, Some(index))?;
+            tabs.push(tab);
         }
 
         let tabs = TabsState::new(tabs);
         let mut app = Self {
-            manager,
+            profiles,
             tabs,
             last_pane_size: None,
+            next_profile_index: 0,
         };
         app.focus_active();
 
         Ok(app)
-    }
-
-    pub fn manager(&self) -> &PaneManager {
-        &self.manager
     }
 
     pub fn tabs(&self) -> &TabsState {
@@ -70,12 +45,12 @@ impl App {
 
     pub fn active_handle(&self) -> Option<&PaneHandle> {
         self.tabs
-            .active_pane_id()
-            .and_then(|pane_id| self.manager.get_pane(pane_id))
+            .active_tab()
+            .and_then(|tab| tab.manager.get_pane(tab.pane_id))
     }
 
     pub fn active_profile_name(&self) -> Option<&str> {
-        self.tabs.active_tab().map(|tab| tab.profile.name.as_str())
+        self.tabs.active_tab().map(|tab| tab.title.as_str())
     }
 
     pub fn resize_all(&mut self, area: Rect) {
@@ -91,8 +66,8 @@ impl App {
         self.last_pane_size = Some(size);
 
         let pane_size = PaneSize::new(rows, cols);
-        for tab in self.tabs.tabs() {
-            let _ = self.manager.resize_pane(tab.pane_id, pane_size);
+        for tab in self.tabs.tabs_mut() {
+            let _ = tab.manager.resize_pane(tab.pane_id, pane_size);
         }
     }
 
@@ -106,6 +81,16 @@ impl App {
             return Ok(());
         }
 
+        if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.add_tab_from_next_profile()?;
+            return Ok(());
+        }
+
+        if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.close_active_tab();
+            return Ok(());
+        }
+
         if key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.next_tab();
             return Ok(());
@@ -116,12 +101,16 @@ impl App {
             return Ok(());
         }
 
-        self.manager.route_key(key).await?;
+        if let Some(tab) = self.tabs.active_tab() {
+            tab.manager.route_key(key).await?;
+        }
         Ok(())
     }
 
     pub async fn handle_paste(&mut self, text: &str) -> Result<()> {
-        self.manager.send_input(text.as_bytes()).await?;
+        if let Some(tab) = self.tabs.active_tab() {
+            tab.manager.send_input(text.as_bytes()).await?;
+        }
         Ok(())
     }
 
@@ -136,8 +125,51 @@ impl App {
     }
 
     fn focus_active(&mut self) {
-        if let Some(pane_id) = self.tabs.active_pane_id() {
-            self.manager.set_focus(pane_id);
+        if let Some(tab) = self.tabs.active_tab_mut() {
+            tab.manager.set_focus(tab.pane_id);
         }
     }
+
+    fn add_tab_from_next_profile(&mut self) -> Result<()> {
+        if self.profiles.is_empty() {
+            return Ok(());
+        }
+        let index = self.next_profile_index % self.profiles.len();
+        let profile = self.profiles[index].clone();
+        self.next_profile_index = (index + 1) % self.profiles.len();
+
+        let tab = spawn_tab_from_profile(&profile, Some(index))?;
+        self.tabs.add_tab(tab);
+        let last_index = self.tabs.tabs().len().saturating_sub(1);
+        self.tabs.set_active(last_index);
+        self.focus_active();
+        Ok(())
+    }
+
+    fn close_active_tab(&mut self) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let active = self.tabs.active();
+        let _ = self.tabs.remove_tab(active);
+        if !self.tabs.is_empty() {
+            self.focus_active();
+        }
+    }
+}
+
+fn spawn_tab_from_profile(profile: &Profile, profile_id: Option<usize>) -> Result<crate::tabs::Tab> {
+    let mut config = match &profile.command {
+        Some(command) => SpawnConfig::new_command(command.clone()).args(profile.args.clone()),
+        None => SpawnConfig::new_shell(),
+    };
+
+    if let Some(cwd) = &profile.cwd {
+        config = config.cwd(PathBuf::from(cwd));
+    }
+    for (key, value) in &profile.env {
+        config = config.env(key, value);
+    }
+
+    new_tab(profile.name.clone(), profile_id, config)
 }

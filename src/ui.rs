@@ -59,14 +59,19 @@ fn tab_titles(app: &App) -> Vec<Line> {
         .tabs()
         .iter()
         .map(|tab| {
-            let state = app
-                .manager()
+            let state = tab
+                .manager
                 .get_pane(tab.pane_id)
                 .map(|pane| pane.state())
                 .unwrap_or(PaneState::Exited { code: -1 });
+            let profile_label = tab
+                .profile_id
+                .map(|id| format!(" (#{})", id))
+                .unwrap_or_default();
             Line::from(format!(
-                " {} [{}] ",
-                tab.profile.name,
+                " {}{} [{}] ",
+                tab.title,
+                profile_label,
                 state_label(state)
             ))
         })

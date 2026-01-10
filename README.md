@@ -13,6 +13,8 @@ cargo run
 
 ## Controls
 
+- `Ctrl+T`: new tab (round-robin profile)
+- `Ctrl+W`: close active tab
 - `Ctrl+N`: next tab
 - `Ctrl+P`: previous tab
 - `Ctrl+Q`: quit
@@ -20,9 +22,7 @@ cargo run
 
 ## profiles.json format
 
-You can use either of these formats:
-
-Object form:
+Object form only:
 
 ```
 {
@@ -32,34 +32,20 @@ Object form:
       "command": "powershell.exe",
       "args": ["-NoLogo"],
       "cwd": "C:\\",
-      "env": {"FOO": "bar"},
-      "scrollback": 10000
+      "env": {"FOO": "bar"}
     }
   ]
 }
 ```
 
-Array form:
-
-```
-[
-  {
-    "name": "CMD",
-    "command": "cmd.exe",
-    "args": []
-  }
-]
-```
-
 Fields:
 - `name` (string, required)
-- `command` (string, required)
+- `command` (string, optional; when omitted, default shell is used)
 - `args` (array of string, optional)
 - `cwd` (string, optional)
 - `env` (object string->string, optional)
-- `scrollback` (number, optional)
 
 ## Notes / Limitations
 
-- `cockpit` currently supports up to 4 panes; this MVP limits profiles to 4.
+- Tab title shows profile id as `(#id)` when available.
 - The UI is tab-only (no split panes).
